@@ -1,17 +1,23 @@
 <template>
   <div>
     <h1 class="brand">本周看板</h1>
-    <p class="muted">周卡片网格 · round-robin 落位后可去「对调」申请交换</p>
+    <p class="muted">按日占格 · clean 且 weight&gt;0 的任务按权重占多格 · 落位后可去「对调」申请交换</p>
     <div style="display:flex;gap:8px;margin:12px 0">
       <button @click="generate">生成周表</button>
       <button class="ghost" @click="load">刷新</button>
     </div>
     <p v-if="err" class="err">{{ err }}</p>
+    <div v-if="workload.length" class="week-card" style="margin-bottom:12px;min-height:0">
+      <header>本周负荷（格数）</header>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+        <span v-for="w in workload" :key="w.member_id" class="chip coral">{{ w.member_name }} · {{ w.slots }} 格</span>
+      </div>
+    </div>
     <div class="week-grid">
       <article v-for="d in days" :key="d" class="week-card">
         <header>Day {{ d }}</header>
-        <div v-for="a in byDay(d)" :key="a.id">
-          <span class="chip">{{ a.task_title }}</span>
+        <div v-for="a in byDay(d)" :key="a.id" style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
+          <span class="chip">{{ a.task_title }}<template v-if="a.weight > 1"> ·w{{ a.weight }}</template></span>
           <span class="chip coral">{{ a.member_name }}</span>
         </div>
         <p v-if="!byDay(d).length" class="muted">空</p>
@@ -23,6 +29,7 @@
 import { ref, onMounted } from 'vue'
 import { api } from '../api'
 const assigns = ref([])
+const workload = ref([])
 const days = [0,1,2,3,4,5,6]
 const err = ref('')
 const weekId = 1
@@ -32,6 +39,7 @@ async function load() {
   try {
     const b = await api('/weeks/' + weekId + '/board')
     assigns.value = b.assignments || []
+    workload.value = b.workload || []
   } catch (e) { err.value = e.message }
 }
 async function generate() {

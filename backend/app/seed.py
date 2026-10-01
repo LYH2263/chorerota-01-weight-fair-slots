@@ -6,10 +6,17 @@ def init_db():
     CREATE TABLE IF NOT EXISTS members(id INTEGER PRIMARY KEY, name TEXT, active INT, data_quality TEXT);
     CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY, title TEXT, weight INT, data_quality TEXT);
     CREATE TABLE IF NOT EXISTS weeks(id INTEGER PRIMARY KEY, label TEXT, status TEXT);
-    CREATE TABLE IF NOT EXISTS assignments(id INTEGER PRIMARY KEY AUTOINCREMENT, week_id INT, day INT, task_id INT, member_id INT);
+    CREATE TABLE IF NOT EXISTS assignments(id INTEGER PRIMARY KEY AUTOINCREMENT, week_id INT, day INT, task_id INT, member_id INT, cell INT DEFAULT 0, weight INT);
+    CREATE TABLE IF NOT EXISTS week_task_snapshots(week_id INT, task_id INT, weight INT, PRIMARY KEY(week_id, task_id));
     CREATE TABLE IF NOT EXISTS swap_requests(id INTEGER PRIMARY KEY AUTOINCREMENT, week_id INT, a_day INT, a_task INT, b_day INT, b_task INT, status TEXT, note TEXT);
     CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
     """)
+    # 轻量迁移：CREATE TABLE IF NOT EXISTS 不会给已存在的 assignments 补列。
+    existing = {r["name"] for r in c.execute("PRAGMA table_info(assignments)")}
+    if "cell" not in existing:
+        c.execute("ALTER TABLE assignments ADD COLUMN cell INT DEFAULT 0")
+    if "weight" not in existing:
+        c.execute("ALTER TABLE assignments ADD COLUMN weight INT")
     if c.execute("SELECT COUNT(*) c FROM members").fetchone()["c"] == 0:
         c.executemany("INSERT INTO members(name,active,data_quality) VALUES (?,?,?)", [
             ("阿明", 1, "clean"), ("小雨", 1, "clean"), ("爷爷", 1, "clean"),

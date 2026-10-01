@@ -4,7 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from app import seed
 from app.db import connect
-from app.engines.rota import build_week_slots, swap_legal, apply_swap
+from app.engines.rota import swap_legal, apply_swap
+from app.modules.weight import generate_week, get_board, TaskPlanError
 
 app = FastAPI(title="Chorerota", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -37,6 +38,18 @@ def add_task(body: dict):
                     (body.get("title","任务"), int(body.get("weight",1)), body.get("data_quality","clean")))
     c.commit(); tid = cur.lastrowid; c.close(); return {"id": tid}
 
+@app.put("/api/tasks/{task_id}")
+def update_task(task_id: int, body: dict):
+    c = connect()
+    task = c.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+    if not task: c.close(); raise HTTPException(404, "task not found")
+    if "title" in body:
+        c.execute("UPDATE tasks SET title=? WHERE id=?", (body["title"], task_id))
+    if "weight" in body:
+        # 允许写入任意整数（含 <=0）；是否准入由生成时的 guard 把关，与 POST 对称。
+        c.execute("UPDATE tasks SET weight=? WHERE id=?", (int(body["weight"]), task_id))
+    c.commit(); c.close(); return {"ok": True}
+
 @app.get("/api/weeks")
 def list_weeks():
     c = connect(); rows = [dict(r) for r in c.execute("SELECT * FROM weeks")]; c.close(); return rows
@@ -44,34 +57,24 @@ def list_weeks():
 @app.get("/api/weeks/{week_id}/board")
 def week_board(week_id: int):
     c = connect()
-    week = c.execute("SELECT * FROM weeks WHERE id=?", (week_id,)).fetchone()
-    if not week: c.close(); raise HTTPException(404, "week not found")
-    assigns = [dict(r) for r in c.execute("SELECT * FROM assignments WHERE week_id=?", (week_id,))]
-    members = {r["id"]: r["name"] for r in c.execute("SELECT id,name FROM members")}
-    tasks = {r["id"]: r["title"] for r in c.execute("SELECT id,title FROM tasks")}
-    c.close()
-    for a in assigns:
-        a["member_name"] = members.get(a["member_id"], "?")
-        a["task_title"] = tasks.get(a["task_id"], "?")
-    return {"week": dict(week), "assignments": assigns}
+    try:
+        return get_board(c, week_id)
+    except LookupError:
+        raise HTTPException(404, "week not found")
+    finally:
+        c.close()
 
 class GenBody(BaseModel):
     days: int = 7
 
 @app.post("/api/weeks/{week_id}/generate")
 def generate(week_id: int, body: GenBody = GenBody()):
-    c = connect()
-    week = c.execute("SELECT * FROM weeks WHERE id=?", (week_id,)).fetchone()
-    if not week: c.close(); raise HTTPException(404, "week not found")
-    mids = [r["id"] for r in c.execute("SELECT id FROM members WHERE active=1 AND data_quality='clean' ORDER BY id")]
-    tids = [r["id"] for r in c.execute("SELECT id FROM tasks WHERE data_quality='clean' AND weight>0 ORDER BY id")]
-    slots = build_week_slots(mids, tids, days=body.days)
-    c.execute("DELETE FROM assignments WHERE week_id=?", (week_id,))
-    for s in slots:
-        c.execute("INSERT INTO assignments(week_id,day,task_id,member_id) VALUES (?,?,?,?)",
-                  (week_id, s["day"], s["task_id"], s["member_id"]))
-    c.execute("UPDATE weeks SET status='ready' WHERE id=?", (week_id,))
-    c.commit(); c.close()
+    try:
+        slots = generate_week(week_id, days=body.days)
+    except LookupError:
+        raise HTTPException(404, "week not found")
+    except TaskPlanError as e:
+        raise HTTPException(400, e.reason)
     return {"count": len(slots), "slots": slots}
 
 class SwapBody(BaseModel):
